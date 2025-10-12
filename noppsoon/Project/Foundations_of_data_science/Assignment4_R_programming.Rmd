@@ -1,0 +1,534 @@
+---
+title: "Task_C-D"
+author: "Noppawan"
+date: "2025-05-31"
+output: html_document
+---
+
+```{r library, include=FALSE}
+
+#install.packages("tidytext")    
+#install.packages("Metrics")
+#install.packages("caret")
+#install.packages("randomForest")
+
+library(tidytext)           
+library(tidyverse)
+library(textstem)
+library(stringr)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(Metrics)
+library(caret)
+library(randomForest)
+
+```
+
+```{r setup, include=FALSE}
+
+property_transaction_victoria <- read.csv("property_transaction_victoria.csv")
+
+```
+
+# Task C: Exploratory Data Analysis Using R
+
+### 1). Identify the top 3 suburbs with the highest number of property transactions over the years, and plot their monthly transaction counts for the year 2022. Include Toorak in the plot as well, if it is not among the top 3 suburbs.
+
+a).
+```{r task c - 1}
+
+# Find which suburbs contain highest property
+top3_suburbs <- property_transaction_victoria %>%
+  count(suburb, name = "transaction_count") %>%
+  arrange(desc(transaction_count)) %>%
+  slice_head(n = 3) %>%
+  pull(suburb)
+
+# Ensure Toorak is included in the top 3 list of suburbs
+if (!"Toorak" %in% top3_suburbs) {
+  top3_suburbs <- c(top3_suburbs, "Toorak")
+}
+
+# Generate new columns for year and month from sold_date 
+property_transaction_victoria_year <- property_transaction_victoria %>%
+  mutate(year_transaction = year(sold_date)) %>%
+  mutate(month_transaction = month(sold_date, label = TRUE))
+
+# Filter the rows containing year 2022 and suburb containing highest property
+filtered_data <- property_transaction_victoria_year %>%
+  filter(year_transaction == 2022, suburb %in% top3_suburbs)
+
+# Group the transaction by suburb and month and count the transaction in each suburb monthly for plotting graph
+monthly_counts <- filtered_data %>%
+  group_by(suburb, month_transaction) %>%
+  summarise(transactions = n(), .groups = "drop")
+
+# Plot graph by filtered data
+ggplot(monthly_counts, aes(x = month_transaction, y = transactions, color = suburb, group = suburb)) +
+  geom_line(size = 1.2) +
+  geom_point() +
+  labs(title = "Monthly Property Transactions in 2022",
+       x = "Month", y = "Number of Transactions") +
+  theme_minimal()
+
+```
+b). The three suburbs with the highest number of property transactions across all years includes Clyde North, Melbourne, Toorak.
+
+c). The top three suburbs with the highest number of property transactions across all years were identified by aggregating transaction counts per suburb, sorting them in descending order, and selecting only the top three. 
+To visualize monthly transaction counts for the year 2022, the month and year were extracted from the property transaction data. Then the dataset was filtered to include only transactions from the top three suburbs within the year 2022. 
+
+Finally, a line graph was plotted using the filtered data to illustrate the trend in property transactions throughout 2022.
+
+
+### 2). What are the 3 most important keywords in the description column that impact property prices? (Note: Since the description column contains a large volume of text, please extract a 10% sample from the original dataset to answer this question.)
+
+a).
+```{r task c - 2}
+
+# Random choose only 10 percent sample of the original data
+set.seed(123)  
+sample_property_transaction_victoria <- property_transaction_victoria %>% sample_frac(0.10)
+
+# Check the value type of price column
+str(sample_property_transaction_victoria$price)
+
+# Check the unique value in price column
+sample_property_transaction_victoria %>%
+  count(price) %>%
+  arrange(desc(n))
+
+# Clean the price column: convert "Contact agent" to NA,
+# remove "$" and "," symbols, and convert to numeric
+sample_property_transaction_victoria <- sample_property_transaction_victoria %>%
+  mutate(
+    price = ifelse(price == "Contact agent", NA, price),
+    price = gsub("[$,]", "", price),           
+    price = as.numeric(price)                  
+  )
+
+# Select price and description columns, split description into words,
+# remove common stopwords, and filter out punctuation or symbols
+tokens_property_transaction_victoria  <- sample_property_transaction_victoria %>%
+  select(price, description) %>%
+  unnest_tokens(word, description) %>%
+  anti_join(get_stopwords()) %>%
+  filter(str_detect(word, "^[a-z]+$")) 
+
+# Group by word and average the price of each word and count the 
+keyword_impact <- tokens_property_transaction_victoria %>%
+  group_by(word) %>%
+  summarise(mean_price = mean(price, na.rm = TRUE), count = n()) %>%
+  filter(count >= 10) %>%  
+  arrange(desc(mean_price))
+
+# Slice the top 3 words associated with the highest average property price
+top3_keywords <- keyword_impact %>%
+  arrange(desc(mean_price)) %>%
+  slice_head(n = 3)
+
+# Demonstrate the results
+print(top3_keywords)
+
+```
+
+b). The top three keywords in the description column that most influence property prices includes 'doyle', 'bangay' and 'tasting'.
+
+c). To determine which three terms in the description field have the greatest effect on property prices, we began by randomly selecting 10% of the property transactions. We examined the structure and values of the price field, removed the dollar signs ($), and converted the values to numeric type. The string "Contact agent" was replaced with NA to indicate missing values.
+For the description column, we tokenized the text into individual words, removed common stop words, and filtered out numbers and punctuation. 
+
+To analyze the relationship between keywords and property prices, we grouped the data by word, calculated the average price for each word, and counted the number of occurrences. Words with fewer than 10 occurrences were excluded to ensure result reliability. 
+Finally, we sorted the words by their associated average prices and selected the top three keywords with the highest average property values.
+
+
+
+### 3). Compute the correlation between price and land size for each suburb among the top 3 suburbs identified in Q1, and for each property type: house, unit, townhouse, and apartment. Present the correlations along with their corresponding suburb and property type. (Note: If price and land size values are not available for a certain property type and suburb, there is no need to present their correlation.)
+
+a).
+```{r task c - 3, echo=FALSE}
+
+# Find which suburbs contain highest property
+top3_suburbs <- property_transaction_victoria %>%
+  count(suburb, name = "transaction_count") %>%
+  arrange(desc(transaction_count)) %>%
+  slice_head(n = 3) %>%
+  pull(suburb)
+
+# Collect the selected type of property
+property_type_value <- c("house", "unit", "townhouse", "apartment")
+
+# Clean the price column: remove "$" and "," symbols, and convert to numeric 
+num_property_transaction_victoria <- property_type_value %>%
+  mutate(price = parse_number(as.character(price)),
+         land_size = as.numeric(land_size))
+
+# Filter to select only the suburbs with the top 3 highest number of property transactions
+# Remove rows with missing values in price or land size
+filtered_data <- num_property_transaction_victoria %>%
+  filter(
+    suburb %in% top3_suburbs,
+    property_type %in% property_type_value,
+    !is.na(price),
+    !is.na(land_size)
+  )
+
+# Calculate the Pearson correlation between price and land size within each group
+correlation_table <- filtered_data %>%
+  group_by(suburb, property_type) %>%
+  summarise(
+    # number of rows in group
+    n = n(),
+    # standard deviation of price
+    sd_price = sd(price),
+    # standard deviation of land_size
+    sd_land = sd(land_size),
+    # Keep only suburb-property_type groups with at least 2 observations and non-zero SD
+    correlation = ifelse(n >= 2 & sd_price > 0 & sd_land > 0,
+                         # otherwise, set correlation to NA to indicate "not computable".
+                         cor(price, land_size, use = "complete.obs", method = "pearson"),
+                         NA_real_),
+     # drop grouping after summarise
+    .groups = "drop"
+  ) %>%
+  # Ensure all suburb × property_type combinations appear in outputs/plots;
+  # missing combos are filled with n = 0 and correlation = NA
+  complete(suburb, property_type,
+         fill = list(correlation = as.numeric(NA), n = 0))%>%
+  # Fix categorical ordering for consistent axes in plots
+  mutate(
+    property_type = factor(property_type, levels = property_type_value),
+    suburb        = factor(suburb, levels = top3_suburbs)
+  )
+
+# Demonstrate the result as a table
+print(correlation_table)
+
+# Plot heatmap of Pearson correlations
+ggplot(correlation_table, 
+       aes(x = property_type, y = suburb, fill = correlation)) +
+  geom_tile(color = "white") +
+  # Diverging palette centered at 0 to show positive vs negative correlations
+  scale_fill_gradient2(limits = c(-1,1), midpoint = 0, 
+                       low = "#2166ac", mid = "white", high = "#b2182b",
+                       # Grey cells indicate groups where r is not computable
+                       na.value = 'grey90', name = "correlation") +
+  # Annotate each cell: show 'NA' when 'correlation' is missing
+  # otherwise show 'correlation' and sample size n
+  geom_text(aes(label = ifelse(is.na(correlation), 'NA', sprintf('%.3f (n=%d)', correlation, n))), size=3) +
+  # Titles and axis labels
+  labs(title = "Correlation between Price and Land Size by Suburb and Property Type",
+       x = "Property Type", y = "Suburb") +
+  coord_fixed() +
+  theme_minimal()
+
+
+```
+
+b). The correlation between each property type and land size in the top three suburbs with the highest number of property transactions across all years was as follows: <br>
+- House in Clyde North - 0.315 <br>
+- Units in Clyde North - 0.993 <br>
+- Townhouse in Clyde North - 0.361 <br>
+- Unit in Melbourne - -0.041 <br>
+- Apartment in Melbourne - 0.027 <br>
+- House in Toorak - 0.301 <br>
+- Townhouse in Toorak - 0.044 <br>
+- Apartment in Toorak - 0.155 <br>
+
+c). To compute the correlation between each property type and land size in the top three suburbs with the highest number of property transactions across all years, firstly, we identified the top three suburbs with the highest total number of property transactions across all years using the raw table (property_transaction_victoria). <br>
+
+After that, we cleaned data in 'price' column by removing ',', '$' and others including in the columns' values and convert values in 'land_size' and 'price' columns to numeric value. <br>
+
+Then, we restricted the dataset to these three selected suburbs and to the four specified property types (house, unit, townhouse, apartment), and we removed rows with missing values in price or land_size. <br>
+
+We computed the Pearson correlation between price and land_size in each suburb–property type group. To avoid undefined or unstable estimates, we presented 'correlation' when a group had at least two observations and non-zero standard deviation in both variables.
+
+Finally, the correlation results were presented in both tabular and graphical formats for interpretation. <br>
+
+
+### 4). Owning property has long been considered a reliable way to build personal wealth. Which properties have experienced the highest price increases since their first sale? Please exclude properties where the time between the first and last sale exceeds five years. List the top five properties along with their address, capital gain, and the duration between the first and last sale.
+
+a).
+```{r task c - 4, echo=FALSE}
+
+# Check type of sold_date column
+str(property_transaction_victoria$sold_date)
+
+# Transform type of sold_date column to date type
+property_transaction_victoria_date <- property_transaction_victoria %>%
+  mutate(sold_date = as.Date(sold_date))
+
+# Clean the price column: convert "Contact agent" to NA,
+# remove "$" and "," symbols, and convert to numeric
+num_property_transaction_victoria_4 <- property_transaction_victoria_date %>%
+  mutate(
+    price = ifelse(price == "Contact agent", NA, price),               
+    price = gsub("[$,]", "", price),      
+    price = as.numeric(price)               
+  ) 
+
+# Filter out the missing values
+num_property_transaction_victoria_4 <- num_property_transaction_victoria_4  %>%
+  filter(!is.na(price))
+
+# Sort data from the oldest date to the latest date
+price_growth_sort <- num_property_transaction_victoria_4 %>% 
+  arrange(short_address, sold_date)
+
+# Extract the first and last sale dates to calculate duration in years
+# Compute the price growth from the price difference between the first and last sales 
+price_growth_summary <- price_growth_sort %>%
+  group_by(short_address) %>%
+  summarise(
+    first_sale_date = first(sold_date),
+    last_sale_date = last(sold_date),
+    first_price = as.numeric(first(price)),
+    last_price = as.numeric(last(price)),
+    duration_years = as.numeric(difftime(last_sale_date, first_sale_date, units = "days")) / 365,
+    price_growth = last_price - first_price,
+    .groups = "drop"
+  )
+
+# Select only property transactions having time duration less than or equal to 5 years
+price_growth_data <- price_growth_summary %>%
+  filter(duration_years <= 5)
+
+# Select the top 5 properties by price increase
+top5_properties <- price_growth_data %>%
+  arrange(desc(price_growth)) %>%
+  slice_head(n = 5)
+
+# Demonstrate the result as a table
+print(top5_properties)
+
+# Sort factor levels of short_address by descending price_growth
+# The duration_years is converted to months
+top5_properties <- top5_properties %>%
+  mutate(short_address = fct_reorder(short_address, price_growth, .desc = TRUE)) %>%
+  mutate(duration_months = round(duration_years * 12, 1)) 
+
+# Plot Graph
+ggplot(top5_properties, aes(x = short_address, y = price_growth, fill = price_growth)) +
+  geom_col(position = "dodge") +
+  scale_fill_gradient(low = "#afd1ff", high = "#08306b") +
+  labs(x = "Address", y = "Price Growth") +
+  theme_minimal()
+
+```
+
+b). The top five properties with the highest capital gains (within a maximum holding period of five years) are listed below, along with their addresses, capital gain amounts, and durations between the first and last transactions: <br>
+- 4385 South Gippsland Highway, with capital gain $4,290,467,295, duration: 10 months. <br>
+- 18 Keiller Avenue, with capital gain $1,009,368,000, duration: 3 years 7 months. <br>
+- 27/1 Millar Road, with capital gain $319,735,000, duration: 3 years 8 months. <br>
+- 9 Whernside Avenue, with capital gain $11,000,000, duration: 4 years 4 months. <br>
+- 10 Evans Court, with capital gain $7,827,500, duration: 3 days. <br>
+
+c). To display the top five properties with the highest price growth, we began by converting the sold_date column to date format. Next, the price data was cleaned by removing dollar signs, converting it to numeric format, and filtering out missing values.
+
+Then, cleaned data was sorted by short_address and sold_date, and grouped by property address. For each group, the first and last sale dates were extracted to calculate the holding period in years, while the first and last sale prices were used to compute capital growth.
+
+Properties with a holding period of more than five years were excluded. The remaining properties were sorted in descending order based on price growth, and the top five were selected.
+
+The results were presented in tabular and graphical formats to highlight the most volatile properties in terms of capital gain.
+
+
+
+### 5). Property price trends can vary not only across suburbs but also across property types. Identify which suburb–property type combination exhibited the most volatility in median property prices over the months of 2022. Display the top 5 most volatile combinations and provide an appropriate plot. (Note: Consider only the following property types — house, unit, townhouse, and apartment.)
+
+a).
+```{r task c - 5, echo=FALSE}
+
+# Generate new columns to collect separated 
+property_transaction_victoria_year <- property_transaction_victoria %>%
+  mutate(sold_date = as.Date(sold_date)) %>%
+  mutate(year_transaction = year(sold_date)) %>%
+  mutate(month_transaction = month(sold_date, label = TRUE))
+
+# Clean the price column: convert "Contact agent" to NA,
+# remove "$" and "," symbols, and convert to numeric
+num_property_transaction_victoria <- property_transaction_victoria_year %>%
+  mutate(
+    price = ifelse(price == "Contact agent", NA, price),
+    price = gsub("[$,]", "", price),                    
+    price = as.numeric(price)                        
+  ) %>%
+  filter(!is.na(price))
+
+# Keep only the rows from the year 2022 with property types of house, unit, townhouse, or apartment, and remove rows with missing values
+property_2022_5 <- num_property_transaction_victoria %>%
+  filter(
+    year_transaction == 2022,
+    property_type %in% c("house", "unit", "townhouse", "apartment"),
+    !is.na(price))
+
+# Group the properties by suburb, property type, and month of transaction
+# Then calculate the median price for each group that more robust the outliers
+month_median <- property_2022_5 %>%
+  mutate(month_transaction = floor_date(sold_date, unit = "month")) %>%
+  group_by(suburb, property_type, month_transaction) %>%
+  summarise(median_price = median(price), group = "drop")
+
+# Group properties by suburb and property type
+# Calculate volatility as the standard deviation of the median monthly prices
+# Then sort the results in descending order of volatility and select the top 5 most volatile combinations
+top5_volatility_property_transaction_victoria <- month_median %>%
+  group_by(suburb, property_type) %>%
+  summarise(volatility = sd(median_price, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(volatility)) %>%
+  slice_head(n=5)
+
+# top5_volatility_property_transaction_victoria
+print(top5_volatility_property_transaction_victoria)
+
+# Plot top 5 of property volatility
+ggplot(top5_volatility_property_transaction_victoria, aes(x = reorder(paste(suburb, property_type, sep = " - "), volatility), 
+                            y = volatility, fill = volatility)) +
+  geom_col() +
+  scale_fill_gradient(low = "#afd1ff", high = "#08306b") +
+  coord_flip() +
+  labs(title = "Top 5 Most Volatile Suburb–Property Type Combinations in 2022",
+       x = "Suburb – Property Type",
+       y = "Volatility (SD of Monthly Median Price)")
+
+```
+
+b). The top 5 most volatile combinations includes: <br>
+- House type in Toorak with a volatility of $14,639,366. <br>
+- House type in Kooyong with a volatility of $3,455,913. <br>
+- House type in Balnarring Beach with a volatility of $2,836,135. <br>
+- House type in Fingal with a volatility of $2,225,943. <br>
+- House type in Warrandyte South with a volatility of $2,189,667. <br>
+
+c). To identify the suburb and property type combinations with the highest fluctuations in median monthly property prices during 2022, data preprocessing steps were performed. First, the sold_date column was converted to date format, and the year and month were extracted to create a new  variables. The price column was cleaned by removing the dollar sign and converting the values to numeric. Records with missing values of price were excluded from the analysis.
+
+The dataset was filtered to include only transactions from the year 2022 and the specified property types. The median was chosen as the summary statistic due to its robustness against outliers. Monthly median prices were calculated by grouping the data by suburb, property_type, and month_transaction.
+
+To find volatility, the standard deviation of the monthly median prices was computed for each suburb–property_type pair. These combinations were then sorted in descending order of volatility, and the top five were selected. The results were presented in both tabular and graphical formats.
+
+
+### 6). Chris is looking for a renovated house to purchase. He wants the property to be close to a shopping centre, and since he has a 7-year-old son, proximity to a primary school is also important. He is looking for a home with 4 bedrooms and 2 bathrooms. Currently, he is considering six suburbs—Mulgrave, Vermont South, Doncaster East, Rowville, Glen Waverley, and Wheelers Hill—and plans to choose one from this list. Please provide the predicted price for September 2025 of a house that meets the above criteria in each of the six suburbs, and display the predicted price alongside the corresponding suburb name. (Note: When you build the prediction model, please use only the provided dataset and the period it covers.)
+
+a).
+```{r task c - 6, echo=FALSE}
+
+# Transform type of sold_date column to date type
+property_transaction_victoria_date_6 <- property_transaction_victoria %>%
+  mutate(sold_date = as.Date(sold_date)) 
+
+# Clean the price column: convert "Contact agent" to NA,
+# remove "$" and "," symbols, and convert to numeric
+num_property_transaction_victoria_6 <- property_transaction_victoria_date_6 %>%
+  mutate(
+    price = ifelse(price == "Contact agent", NA, price),   
+    price = gsub("[$,]", "", price),                 
+    price = as.numeric(price)                                      
+  ) 
+
+# Filter the house by the task information (houses in 4 bedrooms, 2 bathrooms in Mulgrave, Vermont South, Doncaster East,Rowville, Glen Waverley, or Wheelers Hill)
+# Transform the sold_date in xxxx-xx-01 pattern to support further filtering 
+property_filter_6 <- num_property_transaction_victoria_6 %>%
+  filter(
+    property_type == "house",
+    bedrooms == 4,
+    bathrooms == 2,
+    suburb %in% c("Mulgrave", "Vermont South", "Doncaster East", "Rowville", "Glen Waverley", "Wheelers Hill")
+  ) %>%
+  mutate(month_transaction = floor_date(sold_date, unit = "month"))
+
+# Summarise the median property price for the filtered data, grouped by suburb and transaction month.
+monthly_prices_6 <- property_filter_6 %>%
+  group_by(suburb, month_transaction) %>%
+  summarise(median_price = median(price, na.rm = TRUE), .groups = "drop")
+
+# Filter out missing values
+monthly_prices_6 <- monthly_prices_6 %>%
+  filter(!is.na(month_transaction))
+
+# Convert the transaction month into a numeric time index, 
+# measured in months since the first observed month.
+time_series_6 <- monthly_prices_6 %>%
+  mutate(
+    time_index = as.numeric(difftime(month_transaction, min(month_transaction), unit = "days")) / (365.25/(12))
+  )
+
+# Generate the linear regression model for each suburb to predict the median price price over time. 
+model_fit_6 <- time_series_6 %>%
+  group_by(suburb) %>%
+  do(model = lm(median_price ~ time_index, data = .))
+
+# Define the target date and calculate its time index for prediction.
+target_month <- as.Date("2025-09-1")
+target_index <- as.numeric(difftime(target_month, min(monthly_prices_6$month_transaction), units = "days")) / (365.25/12)
+
+# Forecast the property price for September 2025
+predicted <- model_fit_6 %>%
+  mutate(predicted_price = predict(model, newdata = data.frame(time_index = target_index))) %>%
+  select(suburb, predicted_price)
+
+# Sort the data by predicted price
+predicted %>%
+  arrange(desc(predicted_price))
+
+# Demonstrate the result as a table
+print(predicted)
+
+# Plotting graph of predicted prices for September 2025
+ggplot(predicted, aes(x = reorder(suburb, predicted_price), y = predicted_price, fill = predicted_price)) +
+  geom_col() +
+  scale_fill_gradient(low = "#afd1ff", high = "#08306b") +
+  coord_flip() +
+  labs(
+    title = "Predicted Prices for September 2025",
+    y = "Predicted Price (AUD)",
+    x = "Suburb"
+  ) +
+  theme_minimal()
+
+```
+
+b). The predicted September 2025 house prices, based on the defined criteria, for each of the six selected suburbs as follow: <br>
+- The predicted price of house at Glen Waverley is $1,807,188. <br>
+- The predicted price of house at Doncaster East is $1,743,235.	<br>
+- The predicted price of house at Vermont South is $1,654,213.	<br>
+- The predicted price of house at Wheelers Hill is $1,639,061. <br>		
+- The predicted price of house at Mulgrave is $1,304,075. <br>
+- The predicted price of house at Rowville is $1,223,224.	<br>	
+		
+c). To forecast property prices for September 2025 for houses meeting the Chris's criteria across six suburbs, several preprocessing steps were performed.
+
+First, the sold_date column was converted to date format, and the price column was cleaned by removing dollar signs and converting the values to numeric. The sold_date was then transformed into month_transaction to enable monthly time-based analysis.
+
+The dataset was subsequently filtered according to Chris's requirements: a house with four bedrooms and two bathrooms located in one of six suburbs—Mulgrave, Vermont South, Doncaster East, Rowville, Glen Waverley, and Wheelers Hill.
+
+The filtered data was grouped by suburb and month_transaction to compute the median sale price. A time index was then created by calculating the difference between the target month (September 2025) and the earliest transaction month, divided by 365.25/12 to convert the time into months.
+
+A separate linear regression model was fitted for each suburb using median_price as the response variable and time_index as the predictor. These models were then used to forecast house prices for September 2025.
+
+The forecast results were presented in tabular and visualize formats for interpretation and comparison.
+
+
+
+### Reference
+
+- Boehmke, B., & Greenwell, B. M. (2019). Hands-on machine learning with R. Chapman and Hall/CRC.  https://bradleyboehmke.github.io/HOML/random-forest.html
+
+-Breiman, L. (2001). Random forests. Machine Learning, 45(1), 5–32. https://doi.org/10.1023/A:1010933404324
+
+- Chen, T., & Guestrin, C. (2016). XGBoost: A scalable tree boosting system. Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, 785–794. https://doi.org/10.1145/2939672.2939785
+
+- Greenwell, B. M., & Boehmke, B. C. (2022). vip: Variable importance plots [CRAN vignette]. Comprehensive R Archive Network (CRAN). https://cran.r-project.org/web/packages/vip/vignettes/vip.html
+
+- Holtz, Y. (n.d.). Reorder a variable in ggplot2. The R Graph Gallery. https://r-graph-gallery.com/267-reorder-a-variable-in-ggplot2.html
+
+- James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). An Introduction to Statistical Learning (2nd ed.). Springer. https://doi.org/10.1007/978-1-0716-1418-1
+
+- Jones, F. (2024). The best performance model. RPubs. https://rpubs.com/jewelercart/1171455
+
+- Kassambara, A. (n.d.). Unpaired two-samples Wilcoxon test in R. STHDA.https://www.sthda.com/english/wiki/unpaired-two-samples-wilcoxon-test-in-r
+
+- Marin, M. (n.d.). How to use gsub in R (with examples). Statology. https://www.statology.org/gsub-r/
+
+- Radečić, D. (2024, September 28). Complete guide to gradient boosting and XGBoost in R. Appsilon. https://www.appsilon.com/post/r-xgboost
+
+- Wickham, H., François, R., Henry, L., & Müller, K. (2024). slice: Subset rows using their positions. In dplyr reference manual (v1.1.4). The tidyverse project. https://dplyr.tidyverse.org/reference/slice.html
+
+- Wikipedia contributors. (2024, October 8). Kruskal–Wallis test. In Wikipedia. https://en.wikipedia.org/w/index.php?title=Kruskal%E2%80%93Wallis_test&oldid=1180000000
