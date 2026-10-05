@@ -1,1 +1,15 @@
+# Spotlight on Melbourne: Events Through Time
 
+An interactive dashboard exploring the distribution of performing arts events across Melbourne and the venues that host them, using data from AusStage.
+
+## Features
+- **Year range filter:** Select a time period to explore events.
+- **Interactive map:** View event venues by location. Circle size represents event frequency, while colour indicates the primary genre. Click a marker to view more details.
+- **Top 10 venues:** Compare venues by event count using a stacked bar chart showing their genre composition.
+
+## Purpose
+Explore where events take place, which venues host the most events, and how event genres differ across venues.
+
+## Data Source
+AusStage — Australian live performance database.
+https://www.ausstage.edu.au/
